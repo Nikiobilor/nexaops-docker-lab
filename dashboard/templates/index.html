@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Updated_NexaOps Internal Dashboard</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh}
+    header{background:#1a1f2e;border-bottom:1px solid #2d3748;padding:1rem 2rem;display:flex;justify-content:space-between;align-items:center}
+    header h1{font-size:1.2rem;font-weight:600;color:#63b3ed}
+    .meta{font-size:0.75rem;color:#718096}
+    .env-badge{background:#2d3748;padding:2px 10px;border-radius:20px;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#a0aec0;margin-left:8px}
+    main{max-width:900px;margin:2rem auto;padding:0 1rem;display:grid;gap:1.5rem}
+    .summary{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}
+    .stat-card{background:#1a1f2e;border:1px solid #2d3748;border-radius:8px;padding:1.2rem;text-align:center}
+    .stat-num{font-size:2rem;font-weight:700;color:#63b3ed}
+    .stat-label{font-size:0.75rem;color:#718096;margin-top:4px;text-transform:uppercase;letter-spacing:0.05em}
+    .card{background:#1a1f2e;border:1px solid #2d3748;border-radius:8px;overflow:hidden}
+    .card-header{padding:0.9rem 1.2rem;border-bottom:1px solid #2d3748;display:flex;justify-content:space-between;align-items:center}
+    .card-header h2{font-size:0.85rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#a0aec0}
+    .service-row{display:flex;justify-content:space-between;align-items:center;padding:0.8rem 1.2rem;border-bottom:1px solid #1e2533}
+    .service-row:last-child{border-bottom:none}
+    .service-name{font-size:0.9rem}
+    .badge{font-size:0.65rem;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:0.05em}
+    .badge.operational{background:#1c4532;color:#68d391}
+    .badge.degraded{background:#5c3317;color:#f6ad55}
+    .badge.outage{background:#521b1b;color:#fc8181}
+    .uptime{font-size:0.75rem;color:#718096;margin-right:1rem}
+    .deploy-row{display:grid;grid-template-columns:1fr auto auto auto;gap:1rem;align-items:center;padding:0.8rem 1.2rem;border-bottom:1px solid #1e2533;font-size:0.85rem}
+    .deploy-row:last-child{border-bottom:none}
+    .deploy-service{font-weight:500}
+    .deploy-version{color:#63b3ed;font-family:monospace;font-size:0.8rem}
+    .deploy-by{color:#718096;font-size:0.75rem}
+    .badge.success{background:#1c4532;color:#68d391}
+    .badge.failed{background:#521b1b;color:#fc8181}
+    footer{text-align:center;padding:2rem;color:#4a5568;font-size:0.75rem}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Updated_NexaOps Internal Dashboard</h1>
+      <span class="env-badge">{{ environment }}</span>
+    </div>
+    <div class="meta">v{{ version }} &nbsp;|&nbsp; {{ timestamp }}</div>
+  </header>
+  <main>
+    <div class="summary">
+      <div class="stat-card">
+        <div class="stat-num">{{ operational }}/{{ total }}</div>
+        <div class="stat-label">Services Operational</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">{{ deployments|length }}</div>
+        <div class="stat-label">Recent Deployments</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">{{ "99.6" }}%</div>
+        <div class="stat-label">Overall Uptime (30d)</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><h2>Services Status</h2></div>
+      {% for s in services %}
+      <div class="service-row">
+        <span class="service-name">{{ s.name }}</span>
+        <div style="display:flex;align-items:center">
+          <span class="uptime">{{ s.uptime }}</span>
+          <span class="badge {{ s.status }}">{{ s.status }}</span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="card">
+      <div class="card-header"><h2>Recent Deployments</h2></div>
+      {% for d in deployments %}
+      <div class="deploy-row">
+        <span class="deploy-service">{{ d.service }}</span>
+        <span class="deploy-version">{{ d.version }}</span>
+        <span class="deploy-by">{{ d.deployed_by }}</span>
+        <span class="badge {{ d.status }}">{{ d.status }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </main>
+  <footer>NexaOps Ltd - Production v1.1.0 &mdash; Internal use only by Nicky</footer>
+</body>
+</html>
