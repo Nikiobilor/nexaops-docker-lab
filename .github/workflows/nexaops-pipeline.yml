@@ -1,0 +1,224 @@
+# =============================================================================
+# NexaOps CI/CD Pipeline
+# Stages: test → build → push → deploy
+# Triggers: push to main, pull requests to main
+# =============================================================================
+
+name: NexaOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs when a new push is made to the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Environment variables available to all jobs
+env:
+  IMAGE_NAME: nexaops-dashboard
+  REGISTRY: docker.io
+
+jobs:
+
+  # ── Job 1: Test ─────────────────────────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: dashboard/requirements.txt
+
+      - name: Install dependencies
+        working-directory: dashboard
+        run: pip install -r requirements.txt
+
+      - name: Run tests with coverage
+        working-directory: dashboard
+        run: |
+          python -m pytest tests/ -v \
+            --cov=app \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=70
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: dashboard/coverage.xml
+          retention-days: 7
+
+  # ── Job 2: Lint ─────────────────────────────────────────────────────────────
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linting tools
+        run: pip install flake8
+
+      - name: Run flake8
+        working-directory: dashboard
+        run: |
+          flake8 app/ \
+            --max-line-length=100 \
+            --exclude=__pycache__ \
+            --statistics
+
+  # ── Job 3: Build & Push ──────────────────────────────────────────────────────
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-22.04
+    needs: [test, lint]    # Only runs if both test and lint pass
+
+    # Only push on pushes to main — not on PRs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+      image-digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: dashboard
+          dockerfile: dashboard/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Print image details
+        run: |
+          echo "Image tags: ${{ steps.meta.outputs.tags }}"
+          echo "Image digest: ${{ steps.build.outputs.digest }}"
+
+  # ── Job 4: Deploy ────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-22.04
+    needs: build-and-push    # Only runs after successful build and push
+
+    environment:
+      name: production
+      url: http://${{ secrets.EC2_HOST }}:5000
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+
+            echo "=== NexaOps Deployment ==="
+            echo "Deploying at: $(date -u)"
+            echo "Triggered by: ${{ github.actor }}"
+            echo "Commit: ${{ github.sha }}"
+
+            cd ~/nexaops-dashboard
+
+            echo "--- Pulling latest images ---"
+            docker compose pull dashboard
+
+            echo "--- Restarting dashboard ---"
+            docker compose up -d dashboard
+
+            echo "--- Waiting for health check ---"
+            sleep 15
+
+            echo "--- Verifying deployment ---"
+            HEALTH=$(curl -sf http://localhost:5000/health || echo "FAILED")
+            echo "Health check response: $HEALTH"
+
+            if echo "$HEALTH" | grep -q '"status":"healthy"'; then
+              echo "✔ Deployment successful"
+            else
+              echo "✘ Deployment failed — health check did not pass"
+              docker compose logs dashboard --tail=20
+              exit 1
+            fi
+
+      - name: Verify deployment from runner
+        run: |
+          echo "Verifying from GitHub Actions runner..."
+          sleep 5
+          curl -f http://${{ secrets.EC2_HOST }}:5000/health
+          echo ""
+          echo "Deployment verified successfully"
+
+  # ── Job 5: Notify ────────────────────────────────────────────────────────────
+  notify:
+    name: Pipeline Summary
+    runs-on: ubuntu-22.04
+    needs: [test, lint, build-and-push, deploy]
+    if: always()    # Run even if previous jobs failed
+
+    steps:
+      - name: Pipeline result
+        run: |
+          echo "================================"
+          echo "NexaOps Pipeline Summary"
+          echo "================================"
+          echo "Workflow:  ${{ github.workflow }}"
+          echo "Triggered: ${{ github.event_name }}"
+          echo "Branch:    ${{ github.ref_name }}"
+          echo "Commit:    ${{ github.sha }}"
+          echo "Actor:     ${{ github.actor }}"
+          echo "--------------------------------"
+          echo "Test:      ${{ needs.test.result }}"
+          echo "Lint:      ${{ needs.lint.result }}"
+          echo "Build:     ${{ needs.build-and-push.result }}"
+          echo "Deploy:    ${{ needs.deploy.result }}"
+          echo "================================"
